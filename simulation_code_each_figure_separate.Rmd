@@ -1,0 +1,2111 @@
+---
+title: Comparison of Common Amplitude Metrics in Event-Related Potential Analysis Simulations
+output: html_document
+author: Karen E. Nielsen and Richard Gonzalez
+---
+
+This document will produce figures used in the paper Comparison of Common Amplitude Metrics in Event-Related Potential Analysis. Because each figure can be time-consuming to run at high numbers of repetitions, the document is organized such that the user must only run the code chunks for loading packages and applying general settings (such as the path for saving figures) prior to running any single code chunk that produces a single figure. That is, code chunks after the first 4 do not depend on each other and may be run in any order after the first three have been run. To automatically save figures and/or data to a desired location, edit directory paths in lines 48-49.
+
+Each figure chunk begins with the definition of many functions that are used in the simulation. To manipulate variables in the simulation, we recommend making edits after the RUN SIMULATION comment. In some cases, these functions differ for the specific simulation. Additional global settings are defined in the chunk beginning on line 43.
+
+Variables:
+
+* hz - the number of samples per second, an equipment setting
+* condition - either 1 or 2, see definitions in paper
+* hjvar - standard deviation of distribution from which hj is drawn
+* hkvar - standard deviation of distribution from which hk is drawn
+* hj - height value, subject level
+* hk - height value, trial level
+* ljvar - standard deviation of distribution from which lj is drawn
+* lkvar - standard deviation of distribution from which lk is drawn
+* lj - latency value, subject level
+* lk - latency value, trial level
+* n - number of subjects in the study
+* m1 - number of trials in condition 1
+* m2 - number of trials in condition 2
+* trialcountequal - if TRUE, m2<-m1
+* errortype - either "type1" or "type2" to specify the type of error being explored
+* windowstart - beginning of the window of interest in milliseconds
+* windowend - end of the window of interest in milliseconds
+* reps - number of repetitions (replication studies) in the simulation, more is better (but slower)
+* zivar - variance of zi, the added noise at each time point i
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r load_packages}
+library(dplyr)
+```
+
+This file compiled on `r format(Sys.time(), "%b %d %Y")`
+
+```{r settings}
+reps=10000 #specify number of repetitions
+lat=.1 #specify across-subject latency variability. suggested values are .100 and .020
+zivar=1 #specify noise variance at each time point i. suggested values are 1 or less.
+basefilename<-"sim_w_hybrid_"
+folderforimgs<-paste0(getwd(),"/")
+folderfordata<-paste0(getwd(),"/")
+
+```
+
+```{r hybrid_function}
+takehybrid<-function(vectorofvoltages, numspotsplusminus) {
+  mean(unlist(vectorofvoltages[c((max(which.max(vectorofvoltages)-numspotsplusminus,0)):
+                                   (min(which.max(vectorofvoltages)+numspotsplusminus, length(vectorofvoltages)) ) )]))
+}
+```
+
+# Example Simulated Data
+
+```{r example_data}
+
+#####  DEFINE FUNCTIONS #####
+#givetrial returns the waveform for a single trial
+givetrial<-function(hz, condition, hj, hk, lj, lk){
+  times<-seq(0,1,length.out=hz)
+  noise<-rnorm(hz,0,zivar)
+return((3+(condition==2)*2+hj+hk)*
+         exp(-200*(times-(.300+((condition==1)*.050+lj+lk)))^2)+
+         noise)
+}
+
+#givetrial_equal returns the waveform for a single trial, 
+#but generates from condition 2 regardless
+#condition 2 occurs AT 300ms (no lag)
+givetrial_equal<-function(hz, condition, hj, hk, lj, lk){
+  times<-seq(0,1,length.out=hz)
+  noise<-rnorm(hz,0,zivar)
+return((3+2+hj+hk)*
+         exp(-200*(times-(.300+lj+lk))^2)+ 
+         noise)
+}
+
+
+#givestudy generates all of the waveforms for a study (n*(m1+m2) waveforms)
+givestudy<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype){
+  
+  if(trialcountequal==TRUE) { #this is for modifying trial counts to be equal
+    m2<-m1 
+    }
+  #trialdata stores the values of hj hk lj and lk for each trial
+  #j is subject level, k is trial level. condition doesn't matter for generating these values
+  trialdata<-matrix(c(
+    rep(seq(1,n),each=(m1+m2)),
+    c(rep(c(rep(1,m1), rep(2,m2)),n)),
+    rep(rnorm(n,0,hjvar), each=(m1+m2)),
+    rnorm((m1+m2)*n,0,hkvar), 
+    rep(rnorm(n,0,ljvar), each=(m1+m2)),
+    rnorm((m1+m2)*n,0,lkvar)),
+    ncol = 6,nrow = n*(m1+m2), byrow = FALSE)
+  colnames(trialdata)<-c("subject", "condition", "hj", "hk", "lj", "lk")  
+  trialdata<-as.data.frame(trialdata)
+  trialdata$hz<-hz #samples per second (this code generates one second of baselined data)
+    
+  #type1 means false positive, so reject when equal - 
+  #type1 means generate from the same distribution
+  if(errortype=="type1"){
+      return(cbind(trialdata[,1:6],
+                   as.data.frame(t(mapply(givetrial_equal, #*******
+                                          hz=trialdata$hz, 
+                                          trialdata$condition, 
+                                          trialdata$hj, 
+                                          trialdata$hk, 
+                                          trialdata$lj, 
+                                          trialdata$lk, 
+                                          SIMPLIFY = TRUE)))))
+    }
+    #type2 means false negative, so failing to reject when unequal - 
+    #type2 means generate from different distributions
+    if(errortype=="type2"){
+      return(cbind(trialdata[,1:6],
+                   as.data.frame(t(mapply(givetrial, #**********
+                                          hz=trialdata$hz, 
+                                          trialdata$condition, 
+                                          trialdata$hj, 
+                                          trialdata$hk, 
+                                          trialdata$lj, 
+                                          trialdata$lk, 
+                                          SIMPLIFY = TRUE)))))
+    }
+}
+
+# data from 1 person for 30 trials each of two distinct conditions
+set.seed(12345)
+demodata<-givestudy(hjvar=1,hkvar=1,ljvar=lat,lkvar=lat,n=1, m1=30,m2=30,256,trialcountequal=TRUE,errortype="type2") 
+#for publication, lat=.1 was used (see settings code chunk).
+demodata[1,1:6]
+
+pdf(paste(folderforimgs, "example_data_1trial", ".pdf", sep=""))
+a<-dev.cur()
+tiff(paste(folderforimgs, "example_data_1trial",  ".tiff", sep=""))
+dev.control("enable")
+plot(1:256, demodata[31,3:258], 
+     col="white",
+     ylim=c(-2.5,15),
+     xlim=c(0,260),
+     ylab="voltage", 
+     xlab="time", 
+     xaxt='n', 
+     main=paste("Simulation Example\n 1 trial per condition, same subject"))
+axis(1, at=seq(0,256,length.out=11), labels=seq(0,1000, length.out = 11))
+lines(1:256, demodata[1,7:262], col=2, lwd=2 )
+lines(1:256, demodata[31,7:262], col=4, lwd=2, lty=6)
+
+legend("topright", c(paste0("Cond. 1: ", "latency = 300 + (lj=", round(demodata[1,5],3)*1000, ") + (lk=", round(demodata[1,6],3)*1000,  ") = ", 300+round(demodata[1,5],3)*1000+round(demodata[1,6],3)*1000, "\n               height = 3 + (hj=", round(demodata[1,3],2), ") + (hk=", round(demodata[1,4],2), ") = ", 3+round(demodata[1,3],2)+round(demodata[1,4],2)), paste0("Cond. 2: ", "latency = 350 + (lj=", round(demodata[31,5],3)*1000, ") + (lk=", round(demodata[31,6],3)*1000,  ") = ", 350+round(demodata[31,5],3)*1000+round(demodata[31,6],3)*1000, "\n               height = 5 + (hj=", round(demodata[31,3],2), ") + (hk=", round(demodata[31,4],2), ") = ", 5+round(demodata[31,3],2)+round(demodata[31,4],2))), lty=c(1,6), lwd=2, col=c(2,4),cex=.8,y.intersp=2)
+dev.copy(which=a)
+dev.off()
+dev.off()
+
+#NOTE: The y-axis for this figure was edited in outside software to include appropriate units in publication version.
+```
+
+# Type 1 error rates as trial count in one condition varies, other stays at 30
+```{r m1_varies_type1}
+#####  DEFINE FUNCTIONS #####
+#givetrial returns the waveform for a single trial
+givetrial<-function(hz, condition, hj, hk, lj, lk){
+  times<-seq(0,1,length.out=hz)
+  noise<-rnorm(hz,0,zivar)
+return((3+(condition==2)*2+hj+hk)*
+         exp(-200*(times-(.300+((condition==1)*.050+lj+lk)))^2)+
+         noise)
+}
+
+#givetrial_equal returns the waveform for a single trial, 
+#but generates from condition 2 regardless
+#condition 2 occurs AT 300ms (no lag)
+givetrial_equal<-function(hz, condition, hj, hk, lj, lk){
+  times<-seq(0,1,length.out=hz)
+  noise<-rnorm(hz,0,zivar)
+return((3+2+hj+hk)*
+         exp(-200*(times-(.300+lj+lk))^2)+ 
+         noise)
+}
+
+
+#givestudy generates all of the waveforms for a study (n*(m1+m2) waveforms)
+givestudy<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype){
+  
+  if(trialcountequal==TRUE) { #this is for modifying trial counts to be equal
+    m2<-m1 
+    }
+  #trialdata stores the values of hj hk lj and lk for each trial
+  #j is subject level, k is trial level. condition doesn't matter for generating these values
+  trialdata<-matrix(c(
+    rep(seq(1,n),each=(m1+m2)),
+    c(rep(c(rep(1,m1), rep(2,m2)),n)),
+    rep(rnorm(n,0,hjvar), each=(m1+m2)),
+    rnorm((m1+m2)*n,0,hkvar), 
+    rep(rnorm(n,0,ljvar), each=(m1+m2)),
+    rnorm((m1+m2)*n,0,lkvar)),
+    ncol = 6,nrow = n*(m1+m2), byrow = FALSE)
+  colnames(trialdata)<-c("subject", "condition", "hj", "hk", "lj", "lk")  
+  trialdata<-as.data.frame(trialdata)
+  trialdata$hz<-hz #samples per second (this code generates one second of baselined data)
+    
+  #type1 means false positive, so reject when equal - 
+  #type1 means generate from the same distribution
+  if(errortype=="type1"){
+      return(cbind(trialdata[,1:2],
+                   as.data.frame(t(mapply(givetrial_equal, #*******
+                                          hz=trialdata$hz, 
+                                          trialdata$condition, 
+                                          trialdata$hj, 
+                                          trialdata$hk, 
+                                          trialdata$lj, 
+                                          trialdata$lk, 
+                                          SIMPLIFY = TRUE)))))
+    }
+    #type2 means false negative, so failing to reject when unequal - 
+    #type2 means generate from different distributions
+    if(errortype=="type2"){
+      return(cbind(trialdata[,1:2],
+                   as.data.frame(t(mapply(givetrial, #**********
+                                          hz=trialdata$hz, 
+                                          trialdata$condition, 
+                                          trialdata$hj, 
+                                          trialdata$hk, 
+                                          trialdata$lj, 
+                                          trialdata$lk, 
+                                          SIMPLIFY = TRUE)))))
+    }
+}
+
+
+#this takes the average (at each timepoint) within subject-condition pair 
+#then returns the values in the specified window only
+giveavgwindows<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend){
+  data<-givestudy(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype)
+  data$subject<-as.factor(data$subject)
+  data$condition<-as.factor(data$condition)
+  by_sc<-group_by(data, subject, condition)
+  avg_over_trial<-by_sc %>% summarise_all(mean) 
+  startv<-which(seq(0,1,length.out=hz)>(windowstart/1000))[1]+2
+  endv<-which(seq(0,1,length.out=hz)<
+                (windowend/1000))[length(which(seq(0,1,length.out=hz)<
+                                                 (windowend/1000)))]+2
+  
+  return(as.data.frame(avg_over_trial[,c(1,2,startv:endv)]))
+}
+
+#this takes maximum, average, or hybrid 
+#(one value for each, for each subject-condition pair)
+takemaxavg<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend){
+  windowed_data<-giveavgwindows(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend)
+  rmax<-apply(windowed_data[,-c(1,2)],1,max)
+  ravg<-apply(windowed_data[,-c(1,2)],1,mean)
+  rhybrid<-apply(windowed_data[,-c(1,2)],1,takehybrid, numspotsplusminus=2)
+  results<-as.data.frame(cbind(windowed_data[,c(1,2)], rmax,ravg, rhybrid))
+  results$subject<-as.factor(results$subject)
+  results$condition<-as.factor(results$condition)
+  wide_results<-reshape(results, 
+                        timevar="condition", 
+                        times=c("1", "2"), 
+                        idvar="subject", 
+                        v.names=c("rmax", "ravg", "rhybrid"), 
+                        direction="wide" )
+  wide_results$max_diff<-wide_results$rmax.2-wide_results$rmax.1
+  wide_results$avg_diff<-wide_results$ravg.2-wide_results$ravg.1
+  wide_results$hybrid_diff<-wide_results$rhybrid.2-wide_results$rhybrid.1
+  return(wide_results)
+}
+
+#here we test for paired differences within subject
+testmaxavg<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend){
+  maout<-takemaxavg(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend)
+  maxtest<-t.test(maout$rmax.2, maout$rmax.1, paired=TRUE)
+  avgtest<-t.test(maout$ravg.2, maout$ravg.1, paired=TRUE)
+  hybridtest<-t.test(maout$rhybrid.2, maout$rhybrid.1, paired=TRUE)
+  #type1 error counts the times we reject
+  if(errortype=="type1"){
+      return(c(maxtest$p.value<.05, avgtest$p.value<.05, hybridtest$p.value<.05))
+  }
+  #type2 error counts the times we fail to reject 
+  if(errortype=="type2"){
+      return(c(maxtest$p.value>.05, avgtest$p.value>.05, hybridtest$p.value>.05))
+  }
+}
+
+#this repeats the study many(reps) times and aggregates the results
+error_rates<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal=FALSE,errortype="type1",windowstart,windowend,reps){
+  reps_results<-t(replicate(reps,
+                      testmaxavg(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend)))
+  colnames(reps_results)<-c("max", "avg", "hybrid")
+  return(colMeans(reps_results))
+}
+
+##### RUN SIMULATION #####
+
+#vary number of trials in one condition from 5 to 80 by 5, other condition stays at 30, reps reps of each study.
+varying_values<-seq(5, 80, by=5) #what values to try the simulation at
+vv_mapto<-1*(seq(5,80,by=5)) #what values to put on the plot (often the same)
+
+results<-sapply(varying_values,error_rates,
+                hjvar=1,hkvar=1,ljvar=lat,lkvar=lat,n=20, m1=30,hz=256,
+                trialcountequal=FALSE,errortype="type1",windowstart=250,
+                windowend=350,reps=reps )
+results<-t(results)
+
+###### DISPLAY RESULTS #####
+simtype="type1"
+yesnoline="line_at_05"
+ljlkval=1000*lat
+simname<-"unequal_trial_counts"
+simdesc<-"as trial count in one condition varies, \n other condition stays at 30"
+
+pdf(paste(folderforimgs, basefilename, simname, "_", reps, "reps_", simtype, "_", yesnoline, "_ljlk", ljlkval, "_", format(Sys.time(), "%b_%d_%Y"),  ".pdf", sep=""))
+a<-dev.cur()
+tiff(paste(folderforimgs, basefilename, simname, "_", reps, "reps_", simtype, "_", yesnoline, "_ljlk", ljlkval, "_", format(Sys.time(), "%b_%d_%Y"),  ".tiff", sep=""))
+dev.control("enable")
+plot(results[,1], 
+     col="white",
+     ylab="Type I error rate", 
+     xlab="number of trials in one condition", 
+     xaxt='n', 
+     ylim=c(0,1),
+     main=paste(ifelse(simtype=="type1", "Type I", "Type II"), "Error Rates", simdesc, "\n", reps, "reps, ", ifelse(ljlkval==100, "high", "low"), "latency variability" ))
+axis(1, at=1:length(vv_mapto), labels=vv_mapto)
+lines(results[,1], col=2, lwd=2 )
+lines(results[,2], col=4, lwd=2, lty=6)
+lines(results[,3], col=9, lwd=2, lty=3)
+abline(h=.05)
+legend("topright", c("max  ", "avg  ", "hybrid  "), lty=c(1,6,3), lwd=2, col=c(2,4,9))
+dev.copy(which=a)
+dev.off()
+dev.off()
+
+##### SAVE RESULTS #####
+
+results_w_labels<-cbind(vv_mapto,results)
+colnames(results_w_labels)<-c("values","max","avg", "hybrid")
+write.csv(results_w_labels, file=paste(folderfordata, basefilename, simname, "_", reps, "reps_", simtype, "_", yesnoline, "_ljlk", ljlkval, "_", format(Sys.time(), "%b_%d_%Y"),  ".csv", sep=""))
+
+```
+
+# Type 2 error rates as trial count in one condition varies, other stays at 30
+```{r m1_varies_type2}
+
+#####  DEFINE FUNCTIONS #####
+#givetrial returns the waveform for a single trial
+givetrial<-function(hz, condition, hj, hk, lj, lk){
+  times<-seq(0,1,length.out=hz)
+  noise<-rnorm(hz,0,zivar)
+return((3+(condition==2)*2+hj+hk)*
+         exp(-200*(times-(.300+((condition==1)*.050+lj+lk)))^2)+
+         noise)
+}
+
+#givetrial_equal returns the waveform for a single trial, 
+#but generates from condition 2 regardless
+#condition 2 occurs AT 300ms (no lag)
+givetrial_equal<-function(hz, condition, hj, hk, lj, lk){
+  times<-seq(0,1,length.out=hz)
+  noise<-rnorm(hz,0,zivar)
+return((3+2+hj+hk)*
+         exp(-200*(times-(.300+lj+lk))^2)+ 
+         noise)
+}
+
+
+#givestudy generates all of the waveforms for a study (n*(m1+m2) waveforms)
+givestudy<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype){
+  
+  if(trialcountequal==TRUE) { #this is for modifying trial counts to be equal
+    m2<-m1 
+    }
+  #trialdata stores the values of hj hk lj and lk for each trial
+  #j is subject level, k is trial level. condition doesn't matter for generating these values
+  trialdata<-matrix(c(
+    rep(seq(1,n),each=(m1+m2)),
+    c(rep(c(rep(1,m1), rep(2,m2)),n)),
+    rep(rnorm(n,0,hjvar), each=(m1+m2)),
+    rnorm((m1+m2)*n,0,hkvar), 
+    rep(rnorm(n,0,ljvar), each=(m1+m2)),
+    rnorm((m1+m2)*n,0,lkvar)),
+    ncol = 6,nrow = n*(m1+m2), byrow = FALSE)
+  colnames(trialdata)<-c("subject", "condition", "hj", "hk", "lj", "lk")  
+  trialdata<-as.data.frame(trialdata)
+  trialdata$hz<-hz #samples per second (this code generates one second of baselined data)
+    
+  #type1 means false positive, so reject when equal - 
+  #type1 means generate from the same distribution
+  if(errortype=="type1"){
+      return(cbind(trialdata[,1:2],
+                   as.data.frame(t(mapply(givetrial_equal, #*******
+                                          hz=trialdata$hz, 
+                                          trialdata$condition, 
+                                          trialdata$hj, 
+                                          trialdata$hk, 
+                                          trialdata$lj, 
+                                          trialdata$lk, 
+                                          SIMPLIFY = TRUE)))))
+    }
+    #type2 means false negative, so failing to reject when unequal - 
+    #type2 means generate from different distributions
+    if(errortype=="type2"){
+      return(cbind(trialdata[,1:2],
+                   as.data.frame(t(mapply(givetrial, #**********
+                                          hz=trialdata$hz, 
+                                          trialdata$condition, 
+                                          trialdata$hj, 
+                                          trialdata$hk, 
+                                          trialdata$lj, 
+                                          trialdata$lk, 
+                                          SIMPLIFY = TRUE)))))
+    }
+}
+
+
+#this takes the average (at each timepoint) within subject-condition pair 
+#then returns the values in the specified window only
+giveavgwindows<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend){
+  data<-givestudy(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype)
+  data$subject<-as.factor(data$subject)
+  data$condition<-as.factor(data$condition)
+  by_sc<-group_by(data, subject, condition)
+  avg_over_trial<-by_sc %>% summarise_all(mean) 
+  startv<-which(seq(0,1,length.out=hz)>(windowstart/1000))[1]+2
+  endv<-which(seq(0,1,length.out=hz)<
+                (windowend/1000))[length(which(seq(0,1,length.out=hz)<
+                                                 (windowend/1000)))]+2
+  
+  return(as.data.frame(avg_over_trial[,c(1,2,startv:endv)]))
+}
+
+#this takes maximum, average, or hybrid 
+#(one value for each, for each subject-condition pair)
+takemaxavg<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend){
+  windowed_data<-giveavgwindows(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend)
+  rmax<-apply(windowed_data[,-c(1,2)],1,max)
+  ravg<-apply(windowed_data[,-c(1,2)],1,mean)
+  rhybrid<-apply(windowed_data[,-c(1,2)],1,takehybrid, numspotsplusminus=2)
+  
+  results<-as.data.frame(cbind(windowed_data[,c(1,2)], rmax,ravg, rhybrid))
+  results$subject<-as.factor(results$subject)
+  results$condition<-as.factor(results$condition)
+  wide_results<-reshape(results, 
+                        timevar="condition", 
+                        times=c("1", "2"), 
+                        idvar="subject", 
+                        v.names=c("rmax", "ravg", "rhybrid"), 
+                        direction="wide" )
+  wide_results$max_diff<-wide_results$rmax.2-wide_results$rmax.1
+  wide_results$avg_diff<-wide_results$ravg.2-wide_results$ravg.1
+  wide_results$hybrid_diff<-wide_results$rhybrid.2-wide_results$rhybrid.1
+  return(wide_results)
+}
+
+#here we test for paired differences within subject
+testmaxavg<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend){
+  maout<-takemaxavg(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend)
+  maxtest<-t.test(maout$rmax.2, maout$rmax.1, paired=TRUE)
+  avgtest<-t.test(maout$ravg.2, maout$ravg.1, paired=TRUE)
+  hybridtest<-t.test(maout$rhybrid.2, maout$rhybrid.1, paired=TRUE)
+  #type1 error counts the times we reject
+  if(errortype=="type1"){
+      return(c(maxtest$p.value<.05, avgtest$p.value<.05, hybridtest$p.value<.05))
+  }
+  #type2 error counts the times we fail to reject 
+ 
+  if(errortype=="type2"){
+      return(c(maxtest$p.value>.05, avgtest$p.value>.05, hybridtest$p.value>.05))
+  }
+}
+
+#this repeats the study many(reps) times and aggregates the results
+error_rates<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal=FALSE,errortype="type1",windowstart,windowend,reps){
+  reps_results<-t(replicate(reps,
+                      testmaxavg(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend)))
+  colnames(reps_results)<-c("max", "avg", "hybrid")
+  return(colMeans(reps_results))
+}
+
+##### RUN SIMULATION #####
+
+#vary number of trials in one condition from 5 to 80 by 5, other condition stays at 30, reps reps of each study.
+varying_values<-seq(5, 80, by=5) #what values to try the simulation at
+vv_mapto<-1*(seq(5,80,by=5)) #what values to put on the plot (often the same)
+
+results<-sapply(varying_values,error_rates,
+                hjvar=1,hkvar=1,ljvar=lat,lkvar=lat,n=20, m1=30,hz=256,
+                trialcountequal=TRUE,errortype="type2",windowstart=250,
+                windowend=350,reps=reps )
+results<-t(results)
+
+
+###### DISPLAY RESULTS #####
+simtype="type2"
+yesnoline="line_at_05"
+ljlkval=1000*lat
+simname<-"unequal_trial_counts"
+simdesc<-"as trial count in one condition varies"
+
+pdf(paste(folderforimgs, basefilename, simname, "_", reps, "reps_", simtype, "_", yesnoline, "_ljlk", ljlkval, "_", format(Sys.time(), "%b_%d_%Y"),  ".pdf", sep=""))
+a<-dev.cur()
+tiff(paste(folderforimgs, basefilename, simname, "_", reps, "reps_", simtype, "_", yesnoline, "_ljlk", ljlkval, "_", format(Sys.time(), "%b_%d_%Y"),  ".tiff", sep=""))
+dev.control("enable")
+plot(results[,1], 
+     col="white",
+     ylab="Type II error rate", 
+     xlab="number of trials in one condition", 
+     xaxt='n', 
+     ylim=c(0,1),
+     main=paste(ifelse(simtype=="type1", "Type I", "Type II"), "Error Rates", simdesc, "\n", reps, "reps, ", ifelse(ljlkval==100, "high", "low"), "latency variability" ))
+axis(1, at=1:length(vv_mapto), labels=vv_mapto)
+lines(results[,1], col=2, lwd=2 )
+lines(results[,2], col=4, lwd=2, lty=6)
+lines(results[,3], col=9, lwd=2, lty=3)
+abline(h=.05)
+legend("topright", c("max  ", "avg  ", "hybrid  "), lty=c(1,6,3), lwd=2, col=c(2,4,9))
+dev.copy(which=a)
+dev.off()
+dev.off()
+
+##### SAVE RESULTS #####
+
+results_w_labels<-cbind(vv_mapto,results)
+colnames(results_w_labels)<-c("values","max","avg", "hybrid")
+write.csv(results_w_labels, file=paste(folderfordata, basefilename, simname, "_", reps, "reps_", simtype, "_", yesnoline, "_ljlk", ljlkval, "_", format(Sys.time(), "%b_%d_%Y"),  ".csv", sep=""))
+```
+
+# Type 1 error rates as sampling rate varies 
+```{r hz_varies_type1}
+
+#####  DEFINE FUNCTIONS #####
+#givetrial returns the waveform for a single trial
+givetrial<-function(hz, condition, hj, hk, lj, lk){
+  times<-seq(0,1,length.out=hz)
+  noise<-rnorm(hz,0,zivar)
+return((3+(condition==2)*2+hj+hk)*
+         exp(-200*(times-(.300+((condition==1)*.050+lj+lk)))^2)+
+         noise)
+}
+
+#givetrial_equal returns the waveform for a single trial, 
+#but generates from condition 2 regardless
+#condition 2 occurs AT 300ms (no lag)
+ 
+givetrial_equal<-function(hz, condition, hj, hk, lj, lk){
+  times<-seq(0,1,length.out=hz)
+  noise<-rnorm(hz,0,zivar)
+
+return((3+2+hj+hk)*
+         exp(-200*(times-(.300+lj+lk))^2)+ 
+         noise)
+}
+
+
+#givestudy generates all of the waveforms for a study (n*(m1+m2) waveforms)
+givestudy<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype){
+  
+  if(trialcountequal==TRUE) { #this is for modifying trial counts to be equal
+    m2<-m1 
+    }
+  #trialdata stores the values of hj hk lj and lk for each trial
+  #j is subject level, k is trial level. condition doesn't matter for generating these values
+  trialdata<-matrix(c(
+    rep(seq(1,n),each=(m1+m2)),
+    c(rep(c(rep(1,m1), rep(2,m2)),n)),
+    rep(rnorm(n,0,hjvar), each=(m1+m2)),
+    rnorm((m1+m2)*n,0,hkvar), 
+    rep(rnorm(n,0,ljvar), each=(m1+m2)),
+    rnorm((m1+m2)*n,0,lkvar)),
+    ncol = 6,nrow = n*(m1+m2), byrow = FALSE)
+  colnames(trialdata)<-c("subject", "condition", "hj", "hk", "lj", "lk")  
+  trialdata<-as.data.frame(trialdata)
+  trialdata$hz<-hz #samples per second (this code generates one second of baselined data)
+    
+  #type1 means false positive, so reject when equal - 
+  #type1 means generate from the same distribution
+  if(errortype=="type1"){
+      return(cbind(trialdata[,1:2],
+                   as.data.frame(t(mapply(givetrial_equal, #*******
+                                          hz=trialdata$hz, 
+                                          trialdata$condition, 
+                                          trialdata$hj, 
+                                          trialdata$hk, 
+                                          trialdata$lj, 
+                                          trialdata$lk, 
+                                          SIMPLIFY = TRUE)))))
+    }
+    #type2 means false negative, so failing to reject when unequal - 
+    #type2 means generate from different distributions
+    if(errortype=="type2"){
+      return(cbind(trialdata[,1:2],
+                   as.data.frame(t(mapply(givetrial, #**********
+                                          hz=trialdata$hz, 
+                                          trialdata$condition, 
+                                          trialdata$hj, 
+                                          trialdata$hk, 
+                                          trialdata$lj, 
+                                          trialdata$lk, 
+                                          SIMPLIFY = TRUE)))))
+    }
+}
+
+
+#this takes the average (at each timepoint) within subject-condition pair 
+#then returns the values in the specified window only
+giveavgwindows<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend){
+  data<-givestudy(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype)
+  data$subject<-as.factor(data$subject)
+  data$condition<-as.factor(data$condition)
+  by_sc<-group_by(data, subject, condition)
+  avg_over_trial<-by_sc %>% summarise_all(mean) 
+  startv<-which(seq(0,1,length.out=hz)>(windowstart/1000))[1]+2
+
+
+  endv<-which(seq(0,1,length.out=hz)<
+                (windowend/1000))[length(which(seq(0,1,length.out=hz)<
+                                                 (windowend/1000)))]+2
+  
+  return(as.data.frame(avg_over_trial[,c(1,2,startv:endv)]))
+}
+
+#this takes maximum, average, or hybrid 
+#(one value for each, for each subject-condition pair)
+takemaxavg<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend){
+  windowed_data<-giveavgwindows(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend)
+  rmax<-apply(windowed_data[,-c(1,2)],1,max)
+  ravg<-apply(windowed_data[,-c(1,2)],1,mean)
+  rhybrid<-apply(windowed_data[,-c(1,2)],1,takehybrid, numspotsplusminus=2)
+  
+  
+
+
+
+  results<-as.data.frame(cbind(windowed_data[,c(1,2)], rmax,ravg, rhybrid))
+  results$subject<-as.factor(results$subject)
+  results$condition<-as.factor(results$condition)
+  wide_results<-reshape(results, 
+                        timevar="condition", 
+                        times=c("1", "2"), 
+                        idvar="subject", 
+                        v.names=c("rmax", "ravg", "rhybrid"), 
+                        direction="wide" )
+  wide_results$max_diff<-wide_results$rmax.2-wide_results$rmax.1
+  wide_results$avg_diff<-wide_results$ravg.2-wide_results$ravg.1
+  wide_results$hybrid_diff<-wide_results$rhybrid.2-wide_results$rhybrid.1
+  return(wide_results)
+}
+
+#here we test for paired differences within subject
+testmaxavg<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend){
+  maout<-takemaxavg(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend)
+  maxtest<-t.test(maout$rmax.2, maout$rmax.1, paired=TRUE)
+  avgtest<-t.test(maout$ravg.2, maout$ravg.1, paired=TRUE)
+  hybridtest<-t.test(maout$rhybrid.2, maout$rhybrid.1, paired=TRUE)
+  #type1 error counts the times we reject
+  if(errortype=="type1"){
+      return(c(maxtest$p.value<.05, avgtest$p.value<.05, hybridtest$p.value<.05))
+  }
+  #type2 error counts the times we fail to reject 
+ 
+  if(errortype=="type2"){
+      return(c(maxtest$p.value>.05, avgtest$p.value>.05, hybridtest$p.value>.05))
+  }
+}
+
+#this repeats the study many(reps) times and aggregates the results
+error_rates<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal=FALSE,errortype="type1",windowstart,windowend,reps){
+  reps_results<-t(replicate(reps,
+                      testmaxavg(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend)))
+  colnames(reps_results)<-c("max", "avg", "hybrid")
+  return(colMeans(reps_results))
+}
+
+##### RUN SIMULATION #####
+
+#vary sampling rate from 100 to 1000
+varying_values<-seq(100, 1000, by=100) #what values to try the simulation at
+vv_mapto<-1*(seq(100, 1000, by=100)) #what values to put on the plot (often the same)
+
+results<-sapply(varying_values,error_rates,
+                hjvar=1,hkvar=1,ljvar=lat,lkvar=lat,n=20, m1=30,m2=30,
+                trialcountequal=TRUE,errortype="type1",windowstart=250,
+                windowend=350,reps=reps )
+results<-t(results)
+
+
+###### DISPLAY RESULTS #####
+simtype="type1"
+yesnoline="line_at_05"
+ljlkval=1000*lat
+simname<-"hz_varies"
+simdesc<-"as sampling rate varies"
+
+pdf(paste(folderforimgs, basefilename, simname, "_", reps, "reps_", simtype, "_", yesnoline, "_ljlk", ljlkval, "_", format(Sys.time(), "%b_%d_%Y"),  ".pdf", sep=""))
+a<-dev.cur()
+tiff(paste(folderforimgs, basefilename, simname, "_", reps, "reps_", simtype, "_", yesnoline, "_ljlk", ljlkval, "_", format(Sys.time(), "%b_%d_%Y"),  ".tiff", sep=""))
+dev.control("enable")
+plot(results[,1], 
+     col="white",
+     ylab="Type I error rate", 
+     xlab="sampling rate (Hz)", 
+     xaxt='n', 
+     ylim=c(0,1),
+     main=paste(ifelse(simtype=="type1", "Type I", "Type II"), "Error Rates", simdesc, "\n", reps, "reps, ", ifelse(ljlkval==100, "high", "low"), "latency variability" ))
+axis(1, at=1:length(vv_mapto), labels=vv_mapto)
+lines(results[,1], col=2, lwd=2 )
+lines(results[,2], col=4, lwd=2, lty=6)
+lines(results[,3], col=9, lwd=2, lty=3)
+abline(h=.05)
+legend("topright", c("max  ", "avg  ", "hybrid  "), lty=c(1,6,3), lwd=2, col=c(2,4,9))
+dev.copy(which=a)
+dev.off()
+dev.off()
+
+##### SAVE RESULTS #####
+
+results_w_labels<-cbind(vv_mapto,results)
+colnames(results_w_labels)<-c("values","max","avg", "hybrid")
+write.csv(results_w_labels, file=paste(folderfordata, basefilename, simname, "_", reps, "reps_", simtype, "_", yesnoline, "_ljlk", ljlkval, "_", format(Sys.time(), "%b_%d_%Y"),  ".csv", sep=""))
+```
+
+# Type 2 error rates as sampling rate varies 
+```{r hz_varies_type2}
+
+#####  DEFINE FUNCTIONS #####
+#givetrial returns the waveform for a single trial
+givetrial<-function(hz, condition, hj, hk, lj, lk){
+  times<-seq(0,1,length.out=hz)
+  noise<-rnorm(hz,0,zivar)
+return((3+(condition==2)*2+hj+hk)*
+         exp(-200*(times-(.300+((condition==1)*.050+lj+lk)))^2)+
+         noise)
+}
+
+#givetrial_equal returns the waveform for a single trial, 
+#but generates from condition 2 regardless
+#condition 2 occurs AT 300ms (no lag)
+ 
+givetrial_equal<-function(hz, condition, hj, hk, lj, lk){
+  times<-seq(0,1,length.out=hz)
+  noise<-rnorm(hz,0,zivar)
+
+return((3+2+hj+hk)*
+         exp(-200*(times-(.300+lj+lk))^2)+ 
+         noise)
+
+}
+
+
+#givestudy generates all of the waveforms for a study (n*(m1+m2) waveforms)
+givestudy<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype){
+  
+  if(trialcountequal==TRUE) { #this is for modifying trial counts to be equal
+    m2<-m1 
+    }
+  #trialdata stores the values of hj hk lj and lk for each trial
+  #j is subject level, k is trial level. condition doesn't matter for generating these values
+  trialdata<-matrix(c(
+    rep(seq(1,n),each=(m1+m2)),
+    c(rep(c(rep(1,m1), rep(2,m2)),n)),
+    rep(rnorm(n,0,hjvar), each=(m1+m2)),
+    rnorm((m1+m2)*n,0,hkvar), 
+    rep(rnorm(n,0,ljvar), each=(m1+m2)),
+    rnorm((m1+m2)*n,0,lkvar)),
+    ncol = 6,nrow = n*(m1+m2), byrow = FALSE)
+  colnames(trialdata)<-c("subject", "condition", "hj", "hk", "lj", "lk")  
+  trialdata<-as.data.frame(trialdata)
+  trialdata$hz<-hz #samples per second (this code generates one second of baselined data)
+    
+  #type1 means false positive, so reject when equal - 
+  #type1 means generate from the same distribution
+  if(errortype=="type1"){
+      return(cbind(trialdata[,1:2],
+                   as.data.frame(t(mapply(givetrial_equal, #*******
+                                          hz=trialdata$hz, 
+                                          trialdata$condition, 
+                                          trialdata$hj, 
+                                          trialdata$hk, 
+                                          trialdata$lj, 
+                                          trialdata$lk, 
+                                          SIMPLIFY = TRUE)))))
+    }
+    #type2 means false negative, so failing to reject when unequal - 
+    #type2 means generate from different distributions
+    if(errortype=="type2"){
+      return(cbind(trialdata[,1:2],
+                   as.data.frame(t(mapply(givetrial, #**********
+                                          hz=trialdata$hz, 
+                                          trialdata$condition, 
+                                          trialdata$hj, 
+                                          trialdata$hk, 
+                                          trialdata$lj, 
+                                          trialdata$lk, 
+                                          SIMPLIFY = TRUE)))))
+    }
+}
+
+
+#this takes the average (at each timepoint) within subject-condition pair 
+#then returns the values in the specified window only
+giveavgwindows<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend){
+  data<-givestudy(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype)
+  data$subject<-as.factor(data$subject)
+  data$condition<-as.factor(data$condition)
+  by_sc<-group_by(data, subject, condition)
+  avg_over_trial<-by_sc %>% summarise_all(mean) 
+  startv<-which(seq(0,1,length.out=hz)>(windowstart/1000))[1]+2
+
+
+  endv<-which(seq(0,1,length.out=hz)<
+                (windowend/1000))[length(which(seq(0,1,length.out=hz)<
+                                                 (windowend/1000)))]+2
+  
+  return(as.data.frame(avg_over_trial[,c(1,2,startv:endv)]))
+}
+
+#this takes maximum, average, or hybrid 
+#(one value for each, for each subject-condition pair)
+takemaxavg<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend){
+  windowed_data<-giveavgwindows(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend)
+  rmax<-apply(windowed_data[,-c(1,2)],1,max)
+  ravg<-apply(windowed_data[,-c(1,2)],1,mean)
+  rhybrid<-apply(windowed_data[,-c(1,2)],1,takehybrid, numspotsplusminus=2)
+  
+  results<-as.data.frame(cbind(windowed_data[,c(1,2)], rmax,ravg, rhybrid))
+  results$subject<-as.factor(results$subject)
+  results$condition<-as.factor(results$condition)
+  wide_results<-reshape(results, 
+                        timevar="condition", 
+                        times=c("1", "2"), 
+                        idvar="subject", 
+                        v.names=c("rmax", "ravg", "rhybrid"), 
+                        direction="wide" )
+  wide_results$max_diff<-wide_results$rmax.2-wide_results$rmax.1
+  wide_results$avg_diff<-wide_results$ravg.2-wide_results$ravg.1
+  wide_results$hybrid_diff<-wide_results$rhybrid.2-wide_results$rhybrid.1
+  return(wide_results)
+}
+
+#here we test for paired differences within subject
+testmaxavg<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend){
+  maout<-takemaxavg(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend)
+  maxtest<-t.test(maout$rmax.2, maout$rmax.1, paired=TRUE)
+  avgtest<-t.test(maout$ravg.2, maout$ravg.1, paired=TRUE)
+  hybridtest<-t.test(maout$rhybrid.2, maout$rhybrid.1, paired=TRUE)
+  #type1 error counts the times we reject
+  if(errortype=="type1"){
+      return(c(maxtest$p.value<.05, avgtest$p.value<.05, hybridtest$p.value<.05))
+  }
+  #type2 error counts the times we fail to reject 
+ 
+  if(errortype=="type2"){
+      return(c(maxtest$p.value>.05, avgtest$p.value>.05, hybridtest$p.value>.05))
+  }
+}
+
+#this repeats the study many(reps) times and aggregates the results
+error_rates<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal=FALSE,errortype="type1",windowstart,windowend,reps){
+  reps_results<-t(replicate(reps,
+                      testmaxavg(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend)))
+  colnames(reps_results)<-c("max", "avg", "hybrid")
+  return(colMeans(reps_results))
+}
+
+##### RUN SIMULATION #####
+
+#vary sampling rate from 100 to 1000 Hz
+varying_values<-seq(100, 1000, by=100) #what values to try the simulation at
+vv_mapto<-1*(seq(100, 1000, by=100)) #what values to put on the plot (often the same)
+
+results<-sapply(varying_values,error_rates,
+                hjvar=1,hkvar=1,ljvar=lat,lkvar=lat,n=20, m1=30,m2=30,
+                trialcountequal=TRUE,errortype="type2",windowstart=250,
+                windowend=350,reps=reps )
+results<-t(results)
+
+
+###### DISPLAY RESULTS #####
+simtype="type2"
+yesnoline="line_at_05"
+ljlkval=1000*lat
+simname<-"hz_varies"
+simdesc<-"as sampling rate varies"
+
+pdf(paste(folderforimgs, basefilename, simname, "_", reps, "reps_", simtype, "_", yesnoline, "_ljlk", ljlkval, "_", format(Sys.time(), "%b_%d_%Y"),  ".pdf", sep=""))
+a<-dev.cur()
+tiff(paste(folderforimgs, basefilename, simname, "_", reps, "reps_", simtype, "_", yesnoline, "_ljlk", ljlkval, "_", format(Sys.time(), "%b_%d_%Y"),  ".tiff", sep=""))
+dev.control("enable")
+plot(results[,1], 
+     col="white",
+     ylab="Type II error rate", 
+     xlab="sampling rate (Hz)", 
+     xaxt='n', 
+     ylim=c(0,1),
+     main=paste(ifelse(simtype=="type1", "Type I", "Type II"), "Error Rates", simdesc, "\n", reps, "reps, ", ifelse(ljlkval==100, "high", "low"), "latency variability" ))
+axis(1, at=1:length(vv_mapto), labels=vv_mapto)
+lines(results[,1], col=2, lwd=2 )
+lines(results[,2], col=4, lwd=2, lty=6)
+lines(results[,3], col=9, lwd=2, lty=3)
+abline(h=.05)
+legend("topright", c("max  ", "avg  ", "hybrid  "), lty=c(1,6,3), lwd=2, col=c(2,4,9))
+
+dev.copy(which=a)
+dev.off()
+dev.off()
+
+##### SAVE RESULTS #####
+
+results_w_labels<-cbind(vv_mapto,results)
+colnames(results_w_labels)<-c("values","max","avg", "hybrid")
+write.csv(results_w_labels, file=paste(folderfordata, basefilename, simname, "_", reps, "reps_", simtype, "_", yesnoline, "_ljlk", ljlkval, "_", format(Sys.time(), "%b_%d_%Y"),  ".csv", sep=""))
+
+```
+# Type 1 error rates as window size varies - without latency
+```{r window_size_varies_type1}
+
+#####  DEFINE FUNCTIONS #####
+#givetrial returns the waveform for a single trial
+givetrial<-function(hz, condition, hj, hk, lj, lk){
+  times<-seq(0,1,length.out=hz)
+  noise<-rnorm(hz,0,zivar)
+return((3+(condition==2)*2+hj+hk)*
+         exp(-200*(times-(.300+((condition==1)*.050+lj+lk)))^2)+
+         noise)
+}
+
+#givetrial_equal returns the waveform for a single trial, 
+#but generates from condition 2 regardless
+#condition 2 occurs AT 300ms (no lag)
+ 
+givetrial_equal<-function(hz, condition, hj, hk, lj, lk){
+  times<-seq(0,1,length.out=hz)
+  noise<-rnorm(hz,0,zivar)
+
+return((3+2+hj+hk)*
+         exp(-200*(times-(.300+lj+lk))^2)+ 
+         noise)
+}
+
+
+#givestudy generates all of the waveforms for a study (n*(m1+m2) waveforms)
+givestudy<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype){
+  
+  if(trialcountequal==TRUE) { #this is for modifying trial counts to be equal
+    m2<-m1 
+    }
+  #trialdata stores the values of hj hk lj and lk for each trial
+  #j is subject level, k is trial level. condition doesn't matter for generating these values
+  trialdata<-matrix(c(
+    rep(seq(1,n),each=(m1+m2)),
+    c(rep(c(rep(1,m1), rep(2,m2)),n)),
+    rep(rnorm(n,0,hjvar), each=(m1+m2)),
+    rnorm((m1+m2)*n,0,hkvar), 
+    rep(rnorm(n,0,ljvar), each=(m1+m2)),
+    rnorm((m1+m2)*n,0,lkvar)),
+    ncol = 6,nrow = n*(m1+m2), byrow = FALSE)
+  colnames(trialdata)<-c("subject", "condition", "hj", "hk", "lj", "lk")  
+  trialdata<-as.data.frame(trialdata)
+  trialdata$hz<-hz #samples per second (this code generates one second of baselined data)
+    
+  #type1 means false positive, so reject when equal - 
+  #type1 means generate from the same distribution
+  if(errortype=="type1"){
+      return(cbind(trialdata[,1:2],
+                   as.data.frame(t(mapply(givetrial_equal, #*******
+                                          hz=trialdata$hz, 
+                                          trialdata$condition, 
+                                          trialdata$hj, 
+                                          trialdata$hk, 
+                                          trialdata$lj, 
+                                          trialdata$lk, 
+                                          SIMPLIFY = TRUE)))))
+    }
+    #type2 means false negative, so failing to reject when unequal - 
+    #type2 means generate from different distributions
+    if(errortype=="type2"){
+      return(cbind(trialdata[,1:2],
+                   as.data.frame(t(mapply(givetrial, #**********
+                                          hz=trialdata$hz, 
+                                          trialdata$condition, 
+                                          trialdata$hj, 
+                                          trialdata$hk, 
+                                          trialdata$lj, 
+                                          trialdata$lk, 
+                                          SIMPLIFY = TRUE)))))
+    }
+}
+
+
+#this takes the average (at each timepoint) within subject-condition pair 
+#then returns the values in the specified window only
+giveavgwindows<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend){
+  data<-givestudy(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype)
+  data$subject<-as.factor(data$subject)
+  data$condition<-as.factor(data$condition)
+  by_sc<-group_by(data, subject, condition)
+  avg_over_trial<-by_sc %>% summarise_all(mean) 
+  startv<-which(seq(0,1,length.out=hz)>(windowstart/1000))[1]+2
+  windowend<-600-windowstart #NOTE THIS LINE FORCES SYMMETRIC WIDTH RELATIVE TO WINDOW START
+
+  endv<-which(seq(0,1,length.out=hz)<
+                (windowend/1000))[length(which(seq(0,1,length.out=hz)<
+                                                 (windowend/1000)))]+2
+  
+  return(as.data.frame(avg_over_trial[,c(1,2,startv:endv)]))
+}
+
+#this takes maximum, average, or hybrid 
+#(one value for each, for each subject-condition pair)
+takemaxavg<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend){
+  windowed_data<-giveavgwindows(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend)
+  rmax<-apply(windowed_data[,-c(1,2)],1,max)
+  ravg<-apply(windowed_data[,-c(1,2)],1,mean)
+  rhybrid<-apply(windowed_data[,-c(1,2)],1,takehybrid, numspotsplusminus=2)
+  
+  
+
+
+
+  results<-as.data.frame(cbind(windowed_data[,c(1,2)], rmax,ravg, rhybrid))
+  results$subject<-as.factor(results$subject)
+  results$condition<-as.factor(results$condition)
+  wide_results<-reshape(results, 
+                        timevar="condition", 
+                        times=c("1", "2"), 
+                        idvar="subject", 
+                        v.names=c("rmax", "ravg", "rhybrid"), 
+                        direction="wide" )
+  wide_results$max_diff<-wide_results$rmax.2-wide_results$rmax.1
+  wide_results$avg_diff<-wide_results$ravg.2-wide_results$ravg.1
+  wide_results$hybrid_diff<-wide_results$rhybrid.2-wide_results$rhybrid.1
+  return(wide_results)
+}
+
+#here we test for paired differences within subject
+testmaxavg<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend){
+  maout<-takemaxavg(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend)
+  maxtest<-t.test(maout$rmax.2, maout$rmax.1, paired=TRUE)
+  avgtest<-t.test(maout$ravg.2, maout$ravg.1, paired=TRUE)
+  hybridtest<-t.test(maout$rhybrid.2, maout$rhybrid.1, paired=TRUE)
+  #type1 error counts the times we reject
+  if(errortype=="type1"){
+      return(c(maxtest$p.value<.05, avgtest$p.value<.05, hybridtest$p.value<.05))
+  }
+  #type2 error counts the times we fail to reject 
+ 
+  if(errortype=="type2"){
+      return(c(maxtest$p.value>.05, avgtest$p.value>.05, hybridtest$p.value>.05))
+  }
+}
+
+#this repeats the study many(reps) times and aggregates the results
+error_rates<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal=FALSE,errortype="type1",windowstart,windowend,reps){
+  reps_results<-t(replicate(reps,
+                      testmaxavg(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend)))
+  colnames(reps_results)<-c("max", "avg", "hybrid")
+  return(colMeans(reps_results))
+}
+
+##### RUN SIMULATION #####
+
+#vary width by varying start value (see modified code above), end value mirrors. reps reps of each study.
+varying_values<-seq(160, 295, by=15) #what values to try the simulation at
+vv_mapto<-(-1)*(seq(-280, -10, by=30)) #what values to put on the plot (often the same)
+
+results<-sapply(varying_values,error_rates,
+                hjvar=1,hkvar=1,ljvar=lat,lkvar=lat,n=20, m1=30,m2=30, hz=256,
+                trialcountequal=TRUE,errortype="type1",
+                windowend=0,reps=reps )
+results<-t(results)
+
+
+###### DISPLAY RESULTS #####
+simtype="type1"
+yesnoline="line_at_05"
+ljlkval=1000*lat
+simname<-"width_no_latency"
+simdesc<-"as window width varies, no latency difference"
+
+pdf(paste(folderforimgs, basefilename, simname, "_", reps, "reps_", simtype, "_", yesnoline, "_ljlk", ljlkval, "_", format(Sys.time(), "%b_%d_%Y"),  ".pdf", sep=""))
+a<-dev.cur()
+tiff(paste(folderforimgs, basefilename, simname, "_", reps, "reps_", simtype, "_", yesnoline, "_ljlk", ljlkval, "_", format(Sys.time(), "%b_%d_%Y"),  ".tiff", sep=""))
+dev.control("enable")
+plot(results[,1], 
+     col="white",
+     ylab="Type I error rate", 
+     xlab="window width (milliseconds)", 
+     xaxt='n', 
+     ylim=c(0,1),
+     main=paste(ifelse(simtype=="type1", "Type I", "Type II"), "Error Rates", simdesc, "\n", reps, "reps, ", ifelse(ljlkval==100, "high", "low"), "latency variability" ))
+axis(1, at=1:length(vv_mapto), labels=vv_mapto)
+lines(results[,1], col=2, lwd=2 )
+lines(results[,2], col=4, lwd=2, lty=6)
+lines(results[,3], col=9, lwd=2, lty=3)
+abline(h=.05)
+legend("topright", c("max  ", "avg  ", "hybrid  "), lty=c(1,6,3), lwd=2, col=c(2,4,9))
+dev.copy(which=a)
+dev.off()
+dev.off()
+
+##### SAVE RESULTS #####
+
+results_w_labels<-cbind(vv_mapto,results)
+colnames(results_w_labels)<-c("values","max","avg", "hybrid")
+write.csv(results_w_labels, file=paste(folderfordata, basefilename, simname, "_", reps, "reps_", simtype, "_", yesnoline, "_ljlk", ljlkval, "_", format(Sys.time(), "%b_%d_%Y"),  ".csv", sep=""))
+
+```
+
+# Type 1 error rates as window size varies - with latency
+
+```{r window_size_varies_latency_type1}
+
+#####  DEFINE FUNCTIONS #####
+#givetrial returns the waveform for a single trial
+givetrial<-function(hz, condition, hj, hk, lj, lk){
+  times<-seq(0,1,length.out=hz)
+  noise<-rnorm(hz,0,zivar)
+return((3+(condition==2)*2+hj+hk)*
+         exp(-200*(times-(.300+((condition==1)*.050+lj+lk)))^2)+
+         noise)
+}
+
+#givetrial_equal returns the waveform for a single trial, 
+#generates from condition 2 amplitude regardless
+# except that here there is a latency difference between conditions
+ 
+givetrial_equal<-function(hz, condition, hj, hk, lj, lk){
+  times<-seq(0,1,length.out=hz)
+  noise<-rnorm(hz,0,zivar)
+
+#return((3+2+hj+hk)*
+#         exp(-200*(times-(.300+lj+lk))^2)+ 
+#         noise)
+return((3+2+hj+hk)*
+         exp(-200*(times-(.300+((condition==1)*.050+lj+lk)))^2)+ 
+         noise) #this modification adds latency differences but not height differences
+}
+
+
+#givestudy generates all of the waveforms for a study (n*(m1+m2) waveforms)
+givestudy<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype){
+  
+  if(trialcountequal==TRUE) { #this is for modifying trial counts to be equal
+    m2<-m1 
+    }
+  #trialdata stores the values of hj hk lj and lk for each trial
+  #j is subject level, k is trial level. condition doesn't matter for generating these values
+  trialdata<-matrix(c(
+    rep(seq(1,n),each=(m1+m2)),
+    c(rep(c(rep(1,m1), rep(2,m2)),n)),
+    rep(rnorm(n,0,hjvar), each=(m1+m2)),
+    rnorm((m1+m2)*n,0,hkvar), 
+    rep(rnorm(n,0,ljvar), each=(m1+m2)),
+    rnorm((m1+m2)*n,0,lkvar)),
+    ncol = 6,nrow = n*(m1+m2), byrow = FALSE)
+  colnames(trialdata)<-c("subject", "condition", "hj", "hk", "lj", "lk")  
+  trialdata<-as.data.frame(trialdata)
+  trialdata$hz<-hz #samples per second (this code generates one second of baselined data)
+    
+  #type1 means false positive, so reject when equal - 
+  #type1 means generate from the same distribution
+  if(errortype=="type1"){
+      return(cbind(trialdata[,1:2],
+                   as.data.frame(t(mapply(givetrial_equal, #*******
+                                          hz=trialdata$hz, 
+                                          trialdata$condition, 
+                                          trialdata$hj, 
+                                          trialdata$hk, 
+                                          trialdata$lj, 
+                                          trialdata$lk, 
+                                          SIMPLIFY = TRUE)))))
+    }
+    #type2 means false negative, so failing to reject when unequal - 
+    #type2 means generate from different distributions
+    if(errortype=="type2"){
+      return(cbind(trialdata[,1:2],
+                   as.data.frame(t(mapply(givetrial, #**********
+                                          hz=trialdata$hz, 
+                                          trialdata$condition, 
+                                          trialdata$hj, 
+                                          trialdata$hk, 
+                                          trialdata$lj, 
+                                          trialdata$lk, 
+                                          SIMPLIFY = TRUE)))))
+    }
+}
+
+
+#this takes the average (at each timepoint) within subject-condition pair 
+#then returns the values in the specified window only
+giveavgwindows<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend){
+  data<-givestudy(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype)
+  data$subject<-as.factor(data$subject)
+  data$condition<-as.factor(data$condition)
+  by_sc<-group_by(data, subject, condition)
+  avg_over_trial<-by_sc %>% summarise_all(mean) 
+  startv<-which(seq(0,1,length.out=hz)>(windowstart/1000))[1]+2
+  windowend<-600-windowstart #NOTE THIS LINE FORCES SYMMETRIC WIDTH RELATIVE TO WINDOW START 
+
+
+  endv<-which(seq(0,1,length.out=hz)<
+                (windowend/1000))[length(which(seq(0,1,length.out=hz)<
+                                                 (windowend/1000)))]+2
+  
+  return(as.data.frame(avg_over_trial[,c(1,2,startv:endv)]))
+}
+
+#this takes maximum, average, or hybrid 
+#(one value for each, for each subject-condition pair)
+takemaxavg<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend){
+  windowed_data<-giveavgwindows(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend)
+  rmax<-apply(windowed_data[,-c(1,2)],1,max)
+  ravg<-apply(windowed_data[,-c(1,2)],1,mean)
+  rhybrid<-apply(windowed_data[,-c(1,2)],1,takehybrid, numspotsplusminus=2)
+  
+  
+
+
+
+  results<-as.data.frame(cbind(windowed_data[,c(1,2)], rmax,ravg, rhybrid))
+  results$subject<-as.factor(results$subject)
+  results$condition<-as.factor(results$condition)
+  wide_results<-reshape(results, 
+                        timevar="condition", 
+                        times=c("1", "2"), 
+                        idvar="subject", 
+                        v.names=c("rmax", "ravg", "rhybrid"), 
+                        direction="wide" )
+  wide_results$max_diff<-wide_results$rmax.2-wide_results$rmax.1
+  wide_results$avg_diff<-wide_results$ravg.2-wide_results$ravg.1
+  wide_results$hybrid_diff<-wide_results$rhybrid.2-wide_results$rhybrid.1
+  return(wide_results)
+}
+
+#here we test for paired differences within subject
+testmaxavg<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend){
+  maout<-takemaxavg(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend)
+  maxtest<-t.test(maout$rmax.2, maout$rmax.1, paired=TRUE)
+  avgtest<-t.test(maout$ravg.2, maout$ravg.1, paired=TRUE)
+  hybridtest<-t.test(maout$rhybrid.2, maout$rhybrid.1, paired=TRUE)
+  #type1 error counts the times we reject
+  if(errortype=="type1"){
+      return(c(maxtest$p.value<.05, avgtest$p.value<.05, hybridtest$p.value<.05))
+  }
+  #type2 error counts the times we fail to reject 
+ 
+  if(errortype=="type2"){
+      return(c(maxtest$p.value>.05, avgtest$p.value>.05, hybridtest$p.value>.05))
+  }
+}
+
+#this repeats the study many(reps) times and aggregates the results
+error_rates<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal=FALSE,errortype="type1",windowstart,windowend,reps){
+  reps_results<-t(replicate(reps,
+                      testmaxavg(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend)))
+  colnames(reps_results)<-c("max", "avg", "hybrid")
+  return(colMeans(reps_results))
+}
+
+##### RUN SIMULATION #####
+
+#vary width by varying start value (see modified code above), end value mirrors. reps reps of each study. latency via modified code above
+varying_values<-seq(185, 320, by=15) #what values to try the simulation at
+vv_mapto<-(-1)*(seq(-280, -10, by=30)) #what values to put on the plot (often the same)
+
+results<-sapply(varying_values,error_rates,
+                hjvar=1,hkvar=1,ljvar=lat,lkvar=lat,n=20, m1=30,m2=30, hz=256,
+                trialcountequal=TRUE,errortype="type1",
+                windowend=0,reps=reps )
+results<-t(results)
+
+#change order narrow to wide window
+results<-results[nrow(results):1, ]
+vv_mapto<-(seq(10, 280, by=30)) #what values to put on the plot (often the same)
+
+
+###### DISPLAY RESULTS #####
+simtype="type1"
+yesnoline="line_at_05"
+ljlkval=1000*lat
+simname<-"width_yes_latency"
+simdesc<-"as window width varies, \n with underlying latency differences"
+
+pdf(paste(folderforimgs, basefilename, simname, "_", reps, "reps_", simtype, "_", yesnoline, "_ljlk", ljlkval, "_", format(Sys.time(), "%b_%d_%Y"),  ".pdf", sep=""))
+a<-dev.cur()
+tiff(paste(folderforimgs, basefilename, simname, "_", reps, "reps_", simtype, "_", yesnoline, "_ljlk", ljlkval, "_", format(Sys.time(), "%b_%d_%Y"),  ".tiff", sep=""))
+dev.control("enable")
+plot(results[,1], 
+     col="white",
+     ylab="Type I error rate", 
+     xlab="window width (milliseconds)", 
+     xaxt='n', 
+     ylim=c(0,1),
+     main=paste(ifelse(simtype=="type1", "Type I", "Type II"), "Error Rates", simdesc, "\n", reps, "reps, ", ifelse(ljlkval==100, "high", "low"), "latency variability" ))
+axis(1, at=1:length(vv_mapto), labels=vv_mapto)
+lines(results[,1], col=2, lwd=2 )
+lines(results[,2], col=4, lwd=2, lty=6)
+lines(results[,3], col=9, lwd=2, lty=3)
+abline(h=.05)
+legend("right", c("max  ", "avg  ", "hybrid  "), lty=c(1,6,3), lwd=2, col=c(2,4,9))
+dev.copy(which=a)
+dev.off()
+dev.off()
+
+##### SAVE RESULTS #####
+
+results_w_labels<-cbind(vv_mapto,results)
+colnames(results_w_labels)<-c("values","max","avg", "hybrid")
+write.csv(results_w_labels, file=paste(folderfordata, basefilename, simname, "_", reps, "reps_", simtype, "_", yesnoline, "_ljlk", ljlkval, "_", format(Sys.time(), "%b_%d_%Y"),  ".csv", sep=""))
+
+```
+
+# Optional Type 2 error rates as window size varies - with latency
+
+```{r window_size_varies_latency_type2}
+
+#####  DEFINE FUNCTIONS #####
+#givetrial returns the waveform for a single trial
+givetrial<-function(hz, condition, hj, hk, lj, lk){
+  times<-seq(0,1,length.out=hz)
+  noise<-rnorm(hz,0,zivar)
+return((3+(condition==2)*2+hj+hk)*
+         exp(-200*(times-(.300+((condition==1)*.050+lj+lk)))^2)+
+         noise)
+}
+
+#givetrial_equal returns the waveform for a single trial, 
+#generates from condition 2 amplitude regardless
+#but the latency difference is retained (different per condition)
+ 
+givetrial_equal<-function(hz, condition, hj, hk, lj, lk){
+  times<-seq(0,1,length.out=hz)
+  noise<-rnorm(hz,0,zivar)
+
+#return((3+2+hj+hk)*
+#         exp(-200*(times-(.300+lj+lk))^2)+ 
+#         noise)
+return((3+2+hj+hk)*
+         exp(-200*(times-(.300+((condition==1)*.050+lj+lk)))^2)+ 
+         noise)
+}
+
+
+#givestudy generates all of the waveforms for a study (n*(m1+m2) waveforms)
+givestudy<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype){
+  
+  if(trialcountequal==TRUE) { #this is for modifying trial counts to be equal
+    m2<-m1 
+    }
+  #trialdata stores the values of hj hk lj and lk for each trial
+  #j is subject level, k is trial level. condition doesn't matter for generating these values
+  trialdata<-matrix(c(
+    rep(seq(1,n),each=(m1+m2)),
+    c(rep(c(rep(1,m1), rep(2,m2)),n)),
+    rep(rnorm(n,0,hjvar), each=(m1+m2)),
+    rnorm((m1+m2)*n,0,hkvar), 
+    rep(rnorm(n,0,ljvar), each=(m1+m2)),
+    rnorm((m1+m2)*n,0,lkvar)),
+    ncol = 6,nrow = n*(m1+m2), byrow = FALSE)
+  colnames(trialdata)<-c("subject", "condition", "hj", "hk", "lj", "lk")  
+  trialdata<-as.data.frame(trialdata)
+  trialdata$hz<-hz #samples per second (this code generates one second of baselined data)
+    
+  #type1 means false positive, so reject when equal - 
+  #type1 means generate from the same distribution
+  if(errortype=="type1"){
+      return(cbind(trialdata[,1:2],
+                   as.data.frame(t(mapply(givetrial_equal, #*******
+                                          hz=trialdata$hz, 
+                                          trialdata$condition, 
+                                          trialdata$hj, 
+                                          trialdata$hk, 
+                                          trialdata$lj, 
+                                          trialdata$lk, 
+                                          SIMPLIFY = TRUE)))))
+    }
+    #type2 means false negative, so failing to reject when unequal - 
+    #type2 means generate from different distributions
+    if(errortype=="type2"){
+      return(cbind(trialdata[,1:2],
+                   as.data.frame(t(mapply(givetrial, #**********
+                                          hz=trialdata$hz, 
+                                          trialdata$condition, 
+                                          trialdata$hj, 
+                                          trialdata$hk, 
+                                          trialdata$lj, 
+                                          trialdata$lk, 
+                                          SIMPLIFY = TRUE)))))
+    }
+}
+
+
+#this takes the average (at each timepoint) within subject-condition pair 
+#then returns the values in the specified window only
+giveavgwindows<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend){
+  data<-givestudy(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype)
+  data$subject<-as.factor(data$subject)
+  data$condition<-as.factor(data$condition)
+  by_sc<-group_by(data, subject, condition)
+  avg_over_trial<-by_sc %>% summarise_all(mean) 
+  startv<-which(seq(0,1,length.out=hz)>(windowstart/1000))[1]+2
+  windowend<-650-windowstart #NOTE THIS LINE FORCES SYMMETRIC WIDTH RELATIVE TO WINDOW START 
+
+  endv<-which(seq(0,1,length.out=hz)<
+                (windowend/1000))[length(which(seq(0,1,length.out=hz)<
+                                                 (windowend/1000)))]+2
+  
+  return(as.data.frame(avg_over_trial[,c(1,2,startv:endv)]))
+}
+
+#this takes maximum, average, or hybrid 
+#(one value for each, for each subject-condition pair)
+takemaxavg<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend){
+  windowed_data<-giveavgwindows(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend)
+  rmax<-apply(windowed_data[,-c(1,2)],1,max)
+  ravg<-apply(windowed_data[,-c(1,2)],1,mean)
+  rhybrid<-apply(windowed_data[,-c(1,2)],1,takehybrid, numspotsplusminus=2)
+  
+  
+
+
+
+  results<-as.data.frame(cbind(windowed_data[,c(1,2)], rmax,ravg, rhybrid))
+  results$subject<-as.factor(results$subject)
+  results$condition<-as.factor(results$condition)
+  wide_results<-reshape(results, 
+                        timevar="condition", 
+                        times=c("1", "2"), 
+                        idvar="subject", 
+                        v.names=c("rmax", "ravg", "rhybrid"), 
+                        direction="wide" )
+  wide_results$max_diff<-wide_results$rmax.2-wide_results$rmax.1
+  wide_results$avg_diff<-wide_results$ravg.2-wide_results$ravg.1
+  wide_results$hybrid_diff<-wide_results$rhybrid.2-wide_results$rhybrid.1
+  return(wide_results)
+}
+
+#here we test for paired differences within subject
+testmaxavg<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend){
+  maout<-takemaxavg(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend)
+  maxtest<-t.test(maout$rmax.2, maout$rmax.1, paired=TRUE)
+  avgtest<-t.test(maout$ravg.2, maout$ravg.1, paired=TRUE)
+  hybridtest<-t.test(maout$rhybrid.2, maout$rhybrid.1, paired=TRUE)
+  #type1 error counts the times we reject
+  if(errortype=="type1"){
+      return(c(maxtest$p.value<.05, avgtest$p.value<.05, hybridtest$p.value<.05))
+  }
+  #type2 error counts the times we fail to reject 
+ 
+  if(errortype=="type2"){
+      return(c(maxtest$p.value>.05, avgtest$p.value>.05, hybridtest$p.value>.05))
+  }
+}
+
+#this repeats the study many(reps) times and aggregates the results
+error_rates<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal=FALSE,errortype="type1",windowstart,windowend,reps){
+  reps_results<-t(replicate(reps,
+                      testmaxavg(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend)))
+  colnames(reps_results)<-c("max", "avg", "hybrid")
+  return(colMeans(reps_results))
+}
+
+##### RUN SIMULATION #####
+
+#vary width by varying start value (see modified code above), end value mirrors. reps reps of each study. latency via modified code above
+varying_values<-seq(185, 320, by=15) #what values to try the simulation at
+vv_mapto<-(-1)*(seq(-280, -10, by=30)) #what values to put on the plot (often the same)
+
+results<-sapply(varying_values,error_rates,
+                hjvar=1,hkvar=1,ljvar=lat,lkvar=lat,n=20, m1=30,m2=30, hz=256,
+                trialcountequal=TRUE,errortype="type2",
+                windowend=0,reps=reps )
+results<-t(results)
+
+
+###### DISPLAY RESULTS #####
+simtype="type2"
+yesnoline="line_at_05"
+ljlkval=1000*lat
+simname<-"width_yes_latency_center_at_325"
+simdesc<-"as window width varies, \n with underlying latency differences"
+
+pdf(paste(folderforimgs, basefilename, simname, "_", reps, "reps_", simtype, "_", yesnoline, "_ljlk", ljlkval, "_", format(Sys.time(), "%b_%d_%Y"),  ".pdf", sep=""))
+a<-dev.cur()
+tiff(paste(folderforimgs, basefilename, simname, "_", reps, "reps_", simtype, "_", yesnoline, "_ljlk", ljlkval, "_", format(Sys.time(), "%b_%d_%Y"),  ".tiff", sep=""))
+dev.control("enable")
+plot(results[,1], 
+     col="white",
+     ylab="Type II error rate", 
+     xlab="window width (milliseconds)", 
+     xaxt='n', 
+     ylim=c(0,1),
+     main=paste(ifelse(simtype=="type1", "Type I", "Type II"), "Error Rates", simdesc, "\n", reps, "reps, ", ifelse(ljlkval==100, "high", "low"), "latency variability" ))
+axis(1, at=1:length(vv_mapto), labels=vv_mapto)
+lines(results[,1], col=2, lwd=2 )
+lines(results[,2], col=4, lwd=2, lty=6)
+lines(results[,3], col=9, lwd=2, lty=3)
+abline(h=.05)
+legend("topright", c("max  ", "avg  ", "hybrid  "), lty=c(1,6,3), lwd=2, col=c(2,4,9))
+dev.copy(which=a)
+dev.off()
+dev.off()
+
+##### SAVE RESULTS #####
+
+results_w_labels<-cbind(vv_mapto,results)
+colnames(results_w_labels)<-c("values","max","avg", "hybrid")
+write.csv(results_w_labels, file=paste(folderfordata, basefilename, simname, "_", reps, "reps_", simtype, "_", yesnoline, "_ljlk", ljlkval, "_", format(Sys.time(), "%b_%d_%Y"),  ".csv", sep=""))
+```
+
+# Type 1 error rates as window centerreps/location varies - without latency
+
+```{r window_center_varies_type1}
+
+#####  DEFINE FUNCTIONS #####
+#givetrial returns the waveform for a single trial
+givetrial<-function(hz, condition, hj, hk, lj, lk){
+  times<-seq(0,1,length.out=hz)
+  noise<-rnorm(hz,0,zivar)
+return((3+(condition==2)*2+hj+hk)*
+         exp(-200*(times-(.300+((condition==1)*.050+lj+lk)))^2)+
+         noise)
+}
+
+#givetrial_equal returns the waveform for a single trial, 
+#but generates from condition 2 regardless
+#condition 2 occurs AT 300ms (no lag)
+ 
+givetrial_equal<-function(hz, condition, hj, hk, lj, lk){
+  times<-seq(0,1,length.out=hz)
+  noise<-rnorm(hz,0,zivar)
+
+return((3+2+hj+hk)*
+         exp(-200*(times-(.300+lj+lk))^2)+ 
+         noise)
+
+}
+
+
+#givestudy generates all of the waveforms for a study (n*(m1+m2) waveforms)
+givestudy<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype){
+  
+  if(trialcountequal==TRUE) { #this is for modifying trial counts to be equal
+    m2<-m1 
+    }
+  #trialdata stores the values of hj hk lj and lk for each trial
+  #j is subject level, k is trial level. condition doesn't matter for generating these values
+  trialdata<-matrix(c(
+    rep(seq(1,n),each=(m1+m2)),
+    c(rep(c(rep(1,m1), rep(2,m2)),n)),
+    rep(rnorm(n,0,hjvar), each=(m1+m2)),
+    rnorm((m1+m2)*n,0,hkvar), 
+    rep(rnorm(n,0,ljvar), each=(m1+m2)),
+    rnorm((m1+m2)*n,0,lkvar)),
+    ncol = 6,nrow = n*(m1+m2), byrow = FALSE)
+  colnames(trialdata)<-c("subject", "condition", "hj", "hk", "lj", "lk")  
+  trialdata<-as.data.frame(trialdata)
+  trialdata$hz<-hz #samples per second (this code generates one second of baselined data)
+    
+  #type1 means false positive, so reject when equal - 
+  #type1 means generate from the same distribution
+  if(errortype=="type1"){
+      return(cbind(trialdata[,1:2],
+                   as.data.frame(t(mapply(givetrial_equal, #*******
+                                          hz=trialdata$hz, 
+                                          trialdata$condition, 
+                                          trialdata$hj, 
+                                          trialdata$hk, 
+                                          trialdata$lj, 
+                                          trialdata$lk, 
+                                          SIMPLIFY = TRUE)))))
+    }
+    #type2 means false negative, so failing to reject when unequal - 
+    #type2 means generate from different distributions
+    if(errortype=="type2"){
+      return(cbind(trialdata[,1:2],
+                   as.data.frame(t(mapply(givetrial, #**********
+                                          hz=trialdata$hz, 
+                                          trialdata$condition, 
+                                          trialdata$hj, 
+                                          trialdata$hk, 
+                                          trialdata$lj, 
+                                          trialdata$lk, 
+                                          SIMPLIFY = TRUE)))))
+    }
+}
+
+
+#this takes the average (at each timepoint) within subject-condition pair 
+#then returns the values in the specified window only
+giveavgwindows<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend){
+  data<-givestudy(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype)
+  data$subject<-as.factor(data$subject)
+  data$condition<-as.factor(data$condition)
+  by_sc<-group_by(data, subject, condition)
+  avg_over_trial<-by_sc %>% summarise_all(mean) 
+  startv<-which(seq(0,1,length.out=hz)>(windowstart/1000))[1]+2
+
+  windowend<-windowstart+100 #*****NOTE THIS LINE FORCES SAME WIDTH RELATIVE TO WINDOW START
+  endv<-which(seq(0,1,length.out=hz)<
+                (windowend/1000))[length(which(seq(0,1,length.out=hz)<
+                                                 (windowend/1000)))]+2
+  
+  return(as.data.frame(avg_over_trial[,c(1,2,startv:endv)]))
+}
+
+#this takes maximum, average, or hybrid 
+#(one value for each, for each subject-condition pair)
+takemaxavg<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend){
+  windowed_data<-giveavgwindows(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend)
+  rmax<-apply(windowed_data[,-c(1,2)],1,max)
+  ravg<-apply(windowed_data[,-c(1,2)],1,mean)
+  rhybrid<-apply(windowed_data[,-c(1,2)],1,takehybrid, numspotsplusminus=2)
+  
+  
+
+
+
+  results<-as.data.frame(cbind(windowed_data[,c(1,2)], rmax,ravg, rhybrid))
+  results$subject<-as.factor(results$subject)
+  results$condition<-as.factor(results$condition)
+  wide_results<-reshape(results, 
+                        timevar="condition", 
+                        times=c("1", "2"), 
+                        idvar="subject", 
+                        v.names=c("rmax", "ravg", "rhybrid"), 
+                        direction="wide" )
+  wide_results$max_diff<-wide_results$rmax.2-wide_results$rmax.1
+  wide_results$avg_diff<-wide_results$ravg.2-wide_results$ravg.1
+  wide_results$hybrid_diff<-wide_results$rhybrid.2-wide_results$rhybrid.1
+  return(wide_results)
+}
+
+#here we test for paired differences within subject
+testmaxavg<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend){
+  maout<-takemaxavg(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend)
+  maxtest<-t.test(maout$rmax.2, maout$rmax.1, paired=TRUE)
+  avgtest<-t.test(maout$ravg.2, maout$ravg.1, paired=TRUE)
+  hybridtest<-t.test(maout$rhybrid.2, maout$rhybrid.1, paired=TRUE)
+  #type1 error counts the times we reject
+  if(errortype=="type1"){
+      return(c(maxtest$p.value<.05, avgtest$p.value<.05, hybridtest$p.value<.05))
+  }
+  #type2 error counts the times we fail to reject 
+ 
+  if(errortype=="type2"){
+      return(c(maxtest$p.value>.05, avgtest$p.value>.05, hybridtest$p.value>.05))
+  }
+}
+
+#this repeats the study many(reps) times and aggregates the results
+error_rates<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal=FALSE,errortype="type1",windowstart,windowend,reps){
+  reps_results<-t(replicate(reps,
+                      testmaxavg(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend)))
+  colnames(reps_results)<-c("max", "avg", "hybrid")
+  return(colMeans(reps_results))
+}
+
+##### RUN SIMULATION #####
+
+#vary width by varying start value (see modified code above), end value mirrors. reps reps of each study. latency via modified code above
+varying_values<-seq(175, 400, by=25) #what values to try the simulation at
+vv_mapto<-(1)*(seq(-75, 150, by=25)) #what values to put on the plot (often the same)
+
+results<-sapply(varying_values,error_rates,
+                hjvar=1,hkvar=1,ljvar=lat,lkvar=lat,n=20, m1=30,m2=30, hz=256,
+                trialcountequal=TRUE,errortype="type1",
+                windowend=0,reps=reps )
+results<-t(results)
+
+
+###### DISPLAY RESULTS #####
+simtype="type1"
+yesnoline="line_at_05"
+ljlkval=1000*lat
+simname<-"center_no_latency"
+simdesc<-"as window location varies"
+
+pdf(paste(folderforimgs, basefilename, simname, "_", reps, "reps_", simtype, "_", yesnoline, "_ljlk", ljlkval, "_", format(Sys.time(), "%b_%d_%Y"),  ".pdf", sep=""))
+a<-dev.cur()
+tiff(paste(folderforimgs, basefilename, simname, "_", reps, "reps_", simtype, "_", yesnoline, "_ljlk", ljlkval, "_", format(Sys.time(), "%b_%d_%Y"),  ".tiff", sep=""))
+dev.control("enable")
+plot(results[,1], 
+     col="white",
+     ylab="Type I error rate", 
+     xlab="window center distance from 300 (milliseconds)", 
+     xaxt='n', 
+     ylim=c(0,1),
+     main=paste(ifelse(simtype=="type1", "Type I", "Type II"), "Error Rates", simdesc, "\n", reps, "reps, ", ifelse(ljlkval==100, "high", "low"), "latency variability" ))
+axis(1, at=1:length(vv_mapto), labels=vv_mapto)
+lines(results[,1], col=2, lwd=2 )
+lines(results[,2], col=4, lwd=2, lty=6)
+lines(results[,3], col=9, lwd=2, lty=3)
+abline(h=.05)
+legend("topright", c("max  ", "avg  ", "hybrid  "), lty=c(1,6,3), lwd=2, col=c(2,4,9))
+dev.copy(which=a)
+dev.off()
+dev.off()
+
+##### SAVE RESULTS #####
+
+results_w_labels<-cbind(vv_mapto,results)
+colnames(results_w_labels)<-c("values","max","avg", "hybrid")
+write.csv(results_w_labels, file=paste(folderfordata, basefilename, simname, "_", reps, "reps_", simtype, "_", yesnoline, "_ljlk", ljlkval, "_", format(Sys.time(), "%b_%d_%Y"),  ".csv", sep=""))
+```
+
+# Type 1 error rates as window center/location varies - with latency
+```{r window_center_varies_latency_type1}
+
+#####  DEFINE FUNCTIONS #####
+#givetrial returns the waveform for a single trial
+givetrial<-function(hz, condition, hj, hk, lj, lk){
+  times<-seq(0,1,length.out=hz)
+  noise<-rnorm(hz,0,zivar)
+return((3+(condition==2)*2+hj+hk)*
+         exp(-200*(times-(.300+((condition==1)*.050+lj+lk)))^2)+
+         noise)
+}
+
+#givetrial_equal returns the waveform for a single trial, 
+#but generates from condition 2 amplitude regardless
+#latency difference across conditions
+ 
+givetrial_equal<-function(hz, condition, hj, hk, lj, lk){
+  times<-seq(0,1,length.out=hz)
+  noise<-rnorm(hz,0,zivar)
+
+#return((3+2+hj+hk)*
+#         exp(-200*(times-(.300+lj+lk))^2)+ 
+#         noise)
+return((3+2+hj+hk)*
+         exp(-200*(times-(.300+((condition==1)*.050+lj+lk)))^2)+ 
+         noise)
+}
+
+
+#givestudy generates all of the waveforms for a study (n*(m1+m2) waveforms)
+givestudy<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype){
+  
+  if(trialcountequal==TRUE) { #this is for modifying trial counts to be equal
+    m2<-m1 
+    }
+  #trialdata stores the values of hj hk lj and lk for each trial
+  #j is subject level, k is trial level. condition doesn't matter for generating these values
+  trialdata<-matrix(c(
+    rep(seq(1,n),each=(m1+m2)),
+    c(rep(c(rep(1,m1), rep(2,m2)),n)),
+    rep(rnorm(n,0,hjvar), each=(m1+m2)),
+    rnorm((m1+m2)*n,0,hkvar), 
+    rep(rnorm(n,0,ljvar), each=(m1+m2)),
+    rnorm((m1+m2)*n,0,lkvar)),
+    ncol = 6,nrow = n*(m1+m2), byrow = FALSE)
+  colnames(trialdata)<-c("subject", "condition", "hj", "hk", "lj", "lk")  
+  trialdata<-as.data.frame(trialdata)
+  trialdata$hz<-hz #samples per second (this code generates one second of baselined data)
+    
+  #type1 means false positive, so reject when equal - 
+  #type1 means generate from the same distribution
+  if(errortype=="type1"){
+      return(cbind(trialdata[,1:2],
+                   as.data.frame(t(mapply(givetrial_equal, #*******
+                                          hz=trialdata$hz, 
+                                          trialdata$condition, 
+                                          trialdata$hj, 
+                                          trialdata$hk, 
+                                          trialdata$lj, 
+                                          trialdata$lk, 
+                                          SIMPLIFY = TRUE)))))
+    }
+    #type2 means false negative, so failing to reject when unequal - 
+    #type2 means generate from different distributions
+    if(errortype=="type2"){
+      return(cbind(trialdata[,1:2],
+                   as.data.frame(t(mapply(givetrial, #**********
+                                          hz=trialdata$hz, 
+                                          trialdata$condition, 
+                                          trialdata$hj, 
+                                          trialdata$hk, 
+                                          trialdata$lj, 
+                                          trialdata$lk, 
+                                          SIMPLIFY = TRUE)))))
+    }
+}
+
+
+#this takes the average (at each timepoint) within subject-condition pair 
+#then returns the values in the specified window only
+giveavgwindows<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend){
+  data<-givestudy(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype)
+  data$subject<-as.factor(data$subject)
+  data$condition<-as.factor(data$condition)
+  by_sc<-group_by(data, subject, condition)
+  avg_over_trial<-by_sc %>% summarise_all(mean) 
+  startv<-which(seq(0,1,length.out=hz)>(windowstart/1000))[1]+2
+
+  windowend<-windowstart+100 #*****NOTE THIS LINE FORCES SAME WIDTH RELATIVE TO WINDOW START
+  endv<-which(seq(0,1,length.out=hz)<
+                (windowend/1000))[length(which(seq(0,1,length.out=hz)<
+                                                 (windowend/1000)))]+2
+  
+  return(as.data.frame(avg_over_trial[,c(1,2,startv:endv)]))
+}
+
+#this takes maximum, average, or hybrid 
+#(one value for each, for each subject-condition pair)
+takemaxavg<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend){
+  windowed_data<-giveavgwindows(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend)
+  rmax<-apply(windowed_data[,-c(1,2)],1,max)
+  ravg<-apply(windowed_data[,-c(1,2)],1,mean)
+  rhybrid<-apply(windowed_data[,-c(1,2)],1,takehybrid, numspotsplusminus=2)
+  
+  
+
+
+
+  results<-as.data.frame(cbind(windowed_data[,c(1,2)], rmax,ravg, rhybrid))
+  results$subject<-as.factor(results$subject)
+  results$condition<-as.factor(results$condition)
+  wide_results<-reshape(results, 
+                        timevar="condition", 
+                        times=c("1", "2"), 
+                        idvar="subject", 
+                        v.names=c("rmax", "ravg", "rhybrid"), 
+                        direction="wide" )
+  wide_results$max_diff<-wide_results$rmax.2-wide_results$rmax.1
+  wide_results$avg_diff<-wide_results$ravg.2-wide_results$ravg.1
+  wide_results$hybrid_diff<-wide_results$rhybrid.2-wide_results$rhybrid.1
+  return(wide_results)
+}
+
+#here we test for paired differences within subject
+testmaxavg<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend){
+  maout<-takemaxavg(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend)
+  maxtest<-t.test(maout$rmax.2, maout$rmax.1, paired=TRUE)
+  avgtest<-t.test(maout$ravg.2, maout$ravg.1, paired=TRUE)
+  hybridtest<-t.test(maout$rhybrid.2, maout$rhybrid.1, paired=TRUE)
+  #type1 error counts the times we reject
+  if(errortype=="type1"){
+      return(c(maxtest$p.value<.05, avgtest$p.value<.05, hybridtest$p.value<.05))
+  }
+  #type2 error counts the times we fail to reject 
+ 
+  if(errortype=="type2"){
+      return(c(maxtest$p.value>.05, avgtest$p.value>.05, hybridtest$p.value>.05))
+  }
+}
+
+#this repeats the study many(reps) times and aggregates the results
+error_rates<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal=FALSE,errortype="type1",windowstart,windowend,reps){
+  reps_results<-t(replicate(reps,
+                      testmaxavg(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend)))
+  colnames(reps_results)<-c("max", "avg", "hybrid")
+  return(colMeans(reps_results))
+}
+
+##### RUN SIMULATION #####
+
+#vary window center by varying start value (see modified code above), end value mirrors. reps reps of each study. latency via modified code above
+varying_values<-seq(175, 400, by=25) #what values to try the simulation at
+vv_mapto<-(1)*(seq(-75, 150, by=25)) #what values to put on the plot (often the same)
+
+results<-sapply(varying_values,error_rates,
+                hjvar=1,hkvar=1,ljvar=lat,lkvar=lat,n=20, m1=30,m2=30, hz=256,
+                trialcountequal=TRUE,errortype="type1",
+                windowend=0,reps=reps )
+results<-t(results)
+
+
+###### DISPLAY RESULTS #####
+simtype="type1"
+yesnoline="line_at_05"
+ljlkval=1000*lat
+simname<-"center_yes_latency_dense"
+simdesc<-"as window location varies, \n with underlying latency differences"
+
+pdf(paste(folderforimgs, basefilename, simname, "_", reps, "reps_", simtype, "_", yesnoline, "_ljlk", ljlkval, "_", format(Sys.time(), "%b_%d_%Y"),  ".pdf", sep=""))
+a<-dev.cur()
+tiff(paste(folderforimgs, basefilename, simname, "_", reps, "reps_", simtype, "_", yesnoline, "_ljlk", ljlkval, "_", format(Sys.time(), "%b_%d_%Y"),  ".tiff", sep=""))
+dev.control("enable")
+plot(results[,1], 
+     col="white",
+     ylab="Type I error rate", 
+     xlab="window center distance from 300 (milliseconds)", 
+     xaxt='n', 
+     ylim=c(0,1),
+     main=paste(ifelse(simtype=="type1", "Type I", "Type II"), "Error Rates", simdesc, "\n", reps, "reps, ", ifelse(ljlkval==100, "high", "low"), "latency variability" ))
+axis(1, at=1:length(vv_mapto), labels=vv_mapto)
+lines(results[,1], col=2, lwd=2 )
+lines(results[,2], col=4, lwd=2, lty=6)
+lines(results[,3], col=9, lwd=2, lty=3)
+abline(h=.05)
+legend("topright", c("max  ", "avg  ", "hybrid  "), lty=c(1,6,3), lwd=2, col=c(2,4,9))
+dev.copy(which=a)
+dev.off()
+dev.off()
+
+##### SAVE RESULTS #####
+
+results_w_labels<-cbind(vv_mapto,results)
+colnames(results_w_labels)<-c("values","max","avg", "hybrid")
+write.csv(results_w_labels, file=paste(folderfordata, basefilename, simname, "_", reps, "reps_", simtype, "_", yesnoline, "_ljlk", ljlkval, "_", format(Sys.time(), "%b_%d_%Y"),  ".csv", sep=""))
+
+```
+# Type 2 error rates as window center/location varies - with latency
+
+```{r window_center_varies_latency_type2}
+
+#####  DEFINE FUNCTIONS #####
+#givetrial returns the waveform for a single trial
+givetrial<-function(hz, condition, hj, hk, lj, lk){
+  times<-seq(0,1,length.out=hz)
+  noise<-rnorm(hz,0,zivar)
+return((3+(condition==2)*2+hj+hk)*
+         exp(-200*(times-(.300+((condition==1)*.050+lj+lk)))^2)+
+         noise)
+}
+
+#givetrial_equal returns the waveform for a single trial, 
+#but generates from condition 2 amplitude regardless
+#latency differences
+ 
+givetrial_equal<-function(hz, condition, hj, hk, lj, lk){
+  times<-seq(0,1,length.out=hz)
+  noise<-rnorm(hz,0,zivar)
+
+#return((3+2+hj+hk)*
+#         exp(-200*(times-(.300+lj+lk))^2)+ 
+#         noise)
+return((3+2+hj+hk)*
+         exp(-200*(times-(.300+((condition==1)*.050+lj+lk)))^2)+ 
+         noise)
+}
+
+
+#givestudy generates all of the waveforms for a study (n*(m1+m2) waveforms)
+givestudy<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype){
+  
+  if(trialcountequal==TRUE) { #this is for modifying trial counts to be equal
+    m2<-m1 
+    }
+  #trialdata stores the values of hj hk lj and lk for each trial
+  #j is subject level, k is trial level. condition doesn't matter for generating these values
+  trialdata<-matrix(c(
+    rep(seq(1,n),each=(m1+m2)),
+    c(rep(c(rep(1,m1), rep(2,m2)),n)),
+    rep(rnorm(n,0,hjvar), each=(m1+m2)),
+    rnorm((m1+m2)*n,0,hkvar), 
+    rep(rnorm(n,0,ljvar), each=(m1+m2)),
+    rnorm((m1+m2)*n,0,lkvar)),
+    ncol = 6,nrow = n*(m1+m2), byrow = FALSE)
+  colnames(trialdata)<-c("subject", "condition", "hj", "hk", "lj", "lk")  
+  trialdata<-as.data.frame(trialdata)
+  trialdata$hz<-hz #samples per second (this code generates one second of baselined data)
+    
+  #type1 means false positive, so reject when equal - 
+  #type1 means generate from the same distribution
+  if(errortype=="type1"){
+      return(cbind(trialdata[,1:2],
+                   as.data.frame(t(mapply(givetrial_equal, #*******
+                                          hz=trialdata$hz, 
+                                          trialdata$condition, 
+                                          trialdata$hj, 
+                                          trialdata$hk, 
+                                          trialdata$lj, 
+                                          trialdata$lk, 
+                                          SIMPLIFY = TRUE)))))
+    }
+    #type2 means false negative, so failing to reject when unequal - 
+    #type2 means generate from different distributions
+    if(errortype=="type2"){
+      return(cbind(trialdata[,1:2],
+                   as.data.frame(t(mapply(givetrial, #**********
+                                          hz=trialdata$hz, 
+                                          trialdata$condition, 
+                                          trialdata$hj, 
+                                          trialdata$hk, 
+                                          trialdata$lj, 
+                                          trialdata$lk, 
+                                          SIMPLIFY = TRUE)))))
+    }
+}
+
+
+#this takes the average (at each timepoint) within subject-condition pair 
+#then returns the values in the specified window only
+giveavgwindows<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend){
+  data<-givestudy(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype)
+  data$subject<-as.factor(data$subject)
+  data$condition<-as.factor(data$condition)
+  by_sc<-group_by(data, subject, condition)
+  avg_over_trial<-by_sc %>% summarise_all(mean) 
+  startv<-which(seq(0,1,length.out=hz)>(windowstart/1000))[1]+2
+
+  windowend<-windowstart+100 #*****NOTE THIS LINE FORCES SAME WIDTH RELATIVE TO WINDOW START
+  endv<-which(seq(0,1,length.out=hz)<
+                (windowend/1000))[length(which(seq(0,1,length.out=hz)<
+                                                 (windowend/1000)))]+2
+  
+  return(as.data.frame(avg_over_trial[,c(1,2,startv:endv)]))
+}
+
+#this takes maximum, average, or hybrid 
+#(one value for each, for each subject-condition pair)
+takemaxavg<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend){
+  windowed_data<-giveavgwindows(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend)
+  rmax<-apply(windowed_data[,-c(1,2)],1,max)
+  ravg<-apply(windowed_data[,-c(1,2)],1,mean)
+  rhybrid<-apply(windowed_data[,-c(1,2)],1,takehybrid, numspotsplusminus=2)
+  
+  
+
+
+
+  results<-as.data.frame(cbind(windowed_data[,c(1,2)], rmax,ravg, rhybrid))
+  results$subject<-as.factor(results$subject)
+  results$condition<-as.factor(results$condition)
+  wide_results<-reshape(results, 
+                        timevar="condition", 
+                        times=c("1", "2"), 
+                        idvar="subject", 
+                        v.names=c("rmax", "ravg", "rhybrid"), 
+                        direction="wide" )
+  wide_results$max_diff<-wide_results$rmax.2-wide_results$rmax.1
+  wide_results$avg_diff<-wide_results$ravg.2-wide_results$ravg.1
+  wide_results$hybrid_diff<-wide_results$rhybrid.2-wide_results$rhybrid.1
+  return(wide_results)
+}
+
+#here we test for paired differences within subject
+testmaxavg<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend){
+  maout<-takemaxavg(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend)
+  maxtest<-t.test(maout$rmax.2, maout$rmax.1, paired=TRUE)
+  avgtest<-t.test(maout$ravg.2, maout$ravg.1, paired=TRUE)
+  hybridtest<-t.test(maout$rhybrid.2, maout$rhybrid.1, paired=TRUE)
+  #type1 error counts the times we reject
+  if(errortype=="type1"){
+      return(c(maxtest$p.value<.05, avgtest$p.value<.05, hybridtest$p.value<.05))
+  }
+  #type2 error counts the times we fail to reject 
+ 
+  if(errortype=="type2"){
+      return(c(maxtest$p.value>.05, avgtest$p.value>.05, hybridtest$p.value>.05))
+  }
+}
+
+#this repeats the study many(reps) times and aggregates the results
+error_rates<-function(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal=FALSE,errortype="type1",windowstart,windowend,reps){
+  reps_results<-t(replicate(reps,
+                      testmaxavg(hjvar,hkvar,ljvar,lkvar,n,m1,m2,hz,trialcountequal,errortype,windowstart,windowend)))
+  colnames(reps_results)<-c("max", "avg", "hybrid")
+  return(colMeans(reps_results))
+}
+
+##### RUN SIMULATION #####
+
+#vary center of window by varying start value (see modified code above), end value mirrors. reps reps of each study. latency via modified code above
+#varying_values<-seq(175, 400, by=25) #what values to try the simulation at
+#vv_mapto<-(1)*(seq(-75, 150, by=25)) #what values to put on the plot (often the same)
+varying_values<-seq(125, 550, by=25) #what values to try the simulation at
+vv_mapto<-(1)*(seq(-125, 300, by=25)) #what values to put on the plot (often the same)
+
+results<-sapply(varying_values,error_rates,
+                hjvar=1,hkvar=1,ljvar=lat,lkvar=lat,n=20, m1=30,m2=30, hz=256,
+                trialcountequal=TRUE,errortype="type2",
+                windowend=0,reps=reps )
+results<-t(results)
+
+
+###### DISPLAY RESULTS #####
+simtype="type2"
+yesnoline=""
+ljlkval=1000*lat
+simname<-"center_yes_latency"
+simdesc<-"as window location varies, \n with underlying latency differences"
+
+pdf(paste(folderforimgs, basefilename, simname, "_", reps, "reps_", simtype, "_", yesnoline, "_ljlk", ljlkval, "_", format(Sys.time(), "%b_%d_%Y"),  ".pdf", sep=""))
+a<-dev.cur()
+tiff(paste(folderforimgs, basefilename, simname, "_", reps, "reps_", simtype, "_", yesnoline, "_ljlk", ljlkval, "_", format(Sys.time(), "%b_%d_%Y"),  ".tiff", sep=""))
+dev.control("enable")
+plot(results[,1], 
+     col="white",
+     ylab="Type II error rate", 
+     xlab="window center distance from 300 (milliseconds)", 
+     xaxt='n', 
+     ylim=c(0,1.2),
+     main=paste(ifelse(simtype=="type1", "Type I", "Type II"), "Error Rates", simdesc, "\n", reps, "reps, ", ifelse(ljlkval==100, "high", "low"), "latency variability" ))
+axis(1, at=1:length(vv_mapto), labels=vv_mapto)
+if(lat==.02) abline(v=10, lwd=60, col="lightgrey")
+if(lat==.02) abline(v=13, lwd=180, col="grey")
+lines(results[,1], col=2, lwd=2 )
+lines(results[,2], col=4, lwd=2, lty=6)
+lines(results[,3], col=9, lwd=2, lty=3)
+abline(h=1)
+#abline(h=.05)
+legend("topleft", c("max  ", "avg  ", "hybrid  "), lty=c(1,6,3), lwd=2, col=c(2,4,9))
+if(lat==.02) text(x=12.5, y=1.15, labels="Type III Errors (see text)")
+dev.copy(which=a)
+dev.off()
+dev.off()
+
+##### SAVE RESULTS #####
+
+results_w_labels<-cbind(vv_mapto,results)
+colnames(results_w_labels)<-c("values","max","avg", "hybrid")
+write.csv(results_w_labels, file=paste(folderfordata, basefilename, simname, "_", reps, "reps_", simtype, "_", yesnoline, "_ljlk", ljlkval, "_", format(Sys.time(), "%b_%d_%Y"),  ".csv", sep=""))
+```
